@@ -488,136 +488,140 @@ class CodebaseScanner:
         result += f"\nUse explain_file() to learn what each file does."
         return result
 
+class ChatOperation:
+    @staticmethod
+    def _handle_clone_repo(agent: Agent) -> str | None:
+        """Handle cloning a new repository. Returns repo name if successful, None otherwise."""
+        print("\nEnter GitHub repository URL:")
+        github_url = Input().run()
+        if not github_url or github_url.lower() in ['exit', 'quit']:
+            return None
+        
+        response = agent.input(f"Navigate to this repository and clone it: {github_url}")
+        print(f"\n{response}")
+        
+        error_keywords = ["not found", "private", "failed to clone", "can't access", "cannot access", "sorry"]
+        if any(keyword in response.lower() for keyword in error_keywords):
+            print("\nClone failed. Please try again with a valid public repository.\n")
+            return None
+        
+        return github_url.rstrip("/").split("/")[-1]
+
+    @staticmethod
+    def _handle_use_existing_repo() -> str | None:
+        """Handle selecting an existing repository. Returns repo name if successful, None otherwise."""
+        repos_path = Path("repos")
+        if not repos_path.exists():
+            print("\nNo repos folder found. Clone a repository first.\n")
+            return None
+        
+        available_repos = [d.name for d in repos_path.iterdir() if d.is_dir() and not d.name.startswith('.')]
+        if not available_repos:
+            print("\nNo repositories found in ./repos/")
+            print("Please clone a repository first.\n")
+            return None
+        
+        current_repo = pick("Select a repository:", available_repos)
+        print(f"\nUsing repository: {current_repo}")
+        return current_repo
+
+    @staticmethod
+    def _handle_select_folder(codebase: CodebaseScanner) -> str | None:
+        """Handle selecting an arbitrary local folder. Returns folder path if successful, None otherwise."""
+        print("\nEnter path to local folder (relative to current directory or absolute):")
+        print(f"Current directory: {Path.cwd()}")
+        folder_input = Input().run()
+        if not folder_input or folder_input.lower() in ['exit', 'quit']:
+            return None
+        
+        # Changed path resolution logic to handle relative paths from cwd
+        if Path(folder_input).is_absolute():
+            folder_path = Path(folder_input).resolve()
+        else:
+            folder_path = (Path.cwd() / folder_input).resolve()
+        
+        # Split the error check into two separate conditions
+        if not folder_path.exists():
+            print(f"\nFolder '{folder_path}' does not exist.\n")
+            return None
+        
+        if not folder_path.is_dir():
+            print(f"\n'{folder_path}' is not a directory.\n")
+            return None
+        
+        response = codebase.set_codebase_path(str(folder_path))
+        print(f"\n{response}")
+        return str(folder_path) 
+
+
+    @staticmethod
+    def _show_chat_intro(current_repo: str | None, current_folder: str | None):
+        """Show chat interface introduction with examples."""
+        print("\nChat with the assistant about the codebase:")
+        if current_repo:
+            print(f"Current repo: {current_repo}")
+        elif current_folder:
+            print(f"Current folder: {current_folder}")
+        
+        print("Examples:")
+        if current_repo:
+            print(f"  - 'Show structure of {current_repo}'")
+            print(f"  - 'Fuzzy search for auth files in {current_repo}'")
+            print(f"  - 'Recommend files for login feature in {current_repo}'")
+            print(f"  - 'Explain what main.py does in {current_repo}'")
+        elif current_folder:
+            print(f"  - 'Show structure' (using folder: {current_folder})")
+            print(f"  - 'Fuzzy search for auth files'")
+            print(f"  - 'Recommend files for login feature'")
+            print(f"  - 'Explain what main.py does'")
+        print()
+
+
+    @staticmethod
+    def _run_chat_loop(agent: Agent, current_repo: str | None):
+        """Run interactive chat loop. Exits only after completing recommendations or explanations."""
+        while True:
+            print("\n> ", end="")
+            user_input = Input().run()
+            
+            if user_input.lower() in ['exit', 'quit', '']:
+                print("\nGoodbye!")
+                break
+            
+            # If using a folder path, add folder_path parameter
+            if current_folder and "folder_path" not in user_input.lower():
+                user_input = f"{user_input} with folder_path={current_folder}"
+            # If using a repo from /repos, add repo_name parameter
+            elif current_repo and current_repo not in user_input.lower() and "repo_name" not in user_input.lower():
+                user_input = f"{user_input} in {current_repo}"
+            
+            response = agent.input(user_input)
+            print(f"\nAssistant: {response}")
+            
+            # Check if response indicates completion of recommendation or explanation
+            response_lower = response.lower()
+            # Only exit for specific recommendation/explanation patterns
+            if any(phrase in response_lower for phrase in [
+                "recommended files for:",
+                "found a few files that seem relevant",
+                "most relevant ones are",
+                "lines:",
+                "classes:",
+                "functions:",
+                "preview (first 25 lines):"
+            ]):
+                break  # Exit after completing recommendation or explanation
+
 # Initialize tools and agent
 github = GithubAccessLink()
 codebase = CodebaseScanner()
+chat = ChatOperation()
 
 agent = Agent(
     "Codebase Assistant",
-    tools=[github, codebase],
+    tools=[chat, github, codebase],
     system_prompt="prompts/system_prompt.md"
 )
-
-def _handle_clone_repo(agent: Agent) -> str | None:
-    """Handle cloning a new repository. Returns repo name if successful, None otherwise."""
-    print("\nEnter GitHub repository URL:")
-    github_url = Input().run()
-    if not github_url or github_url.lower() in ['exit', 'quit']:
-        return None
-    
-    response = agent.input(f"Navigate to this repository and clone it: {github_url}")
-    print(f"\n{response}")
-    
-    error_keywords = ["not found", "private", "failed to clone", "can't access", "cannot access", "sorry"]
-    if any(keyword in response.lower() for keyword in error_keywords):
-        print("\nClone failed. Please try again with a valid public repository.\n")
-        return None
-    
-    return github_url.rstrip("/").split("/")[-1]
-
-
-def _handle_use_existing_repo() -> str | None:
-    """Handle selecting an existing repository. Returns repo name if successful, None otherwise."""
-    repos_path = Path("repos")
-    if not repos_path.exists():
-        print("\nNo repos folder found. Clone a repository first.\n")
-        return None
-    
-    available_repos = [d.name for d in repos_path.iterdir() if d.is_dir() and not d.name.startswith('.')]
-    if not available_repos:
-        print("\nNo repositories found in ./repos/")
-        print("Please clone a repository first.\n")
-        return None
-    
-    current_repo = pick("Select a repository:", available_repos)
-    print(f"\nUsing repository: {current_repo}")
-    return current_repo
-
-
-def _handle_select_folder(codebase: CodebaseScanner) -> str | None:
-    """Handle selecting an arbitrary local folder. Returns folder path if successful, None otherwise."""
-    print("\nEnter path to local folder (relative to current directory or absolute):")
-    print(f"Current directory: {Path.cwd()}")
-    folder_input = Input().run()
-    if not folder_input or folder_input.lower() in ['exit', 'quit']:
-        return None
-    
-    # Changed path resolution logic to handle relative paths from cwd
-    if Path(folder_input).is_absolute():
-        folder_path = Path(folder_input).resolve()
-    else:
-        folder_path = (Path.cwd() / folder_input).resolve()
-    
-    # Split the error check into two separate conditions
-    if not folder_path.exists():
-        print(f"\nFolder '{folder_path}' does not exist.\n")
-        return None
-    
-    if not folder_path.is_dir():
-        print(f"\n'{folder_path}' is not a directory.\n")
-        return None
-    
-    response = codebase.set_codebase_path(str(folder_path))
-    print(f"\n{response}")
-    return str(folder_path) 
-
-def _show_chat_intro(current_repo: str | None, current_folder: str | None):
-    """Show chat interface introduction with examples."""
-    print("\nChat with the assistant about the codebase:")
-    if current_repo:
-        print(f"Current repo: {current_repo}")
-    elif current_folder:
-        print(f"Current folder: {current_folder}")
-    
-    print("Examples:")
-    if current_repo:
-        print(f"  - 'Show structure of {current_repo}'")
-        print(f"  - 'Fuzzy search for auth files in {current_repo}'")
-        print(f"  - 'Recommend files for login feature in {current_repo}'")
-        print(f"  - 'Explain what main.py does in {current_repo}'")
-    elif current_folder:
-        print(f"  - 'Show structure' (using folder: {current_folder})")
-        print(f"  - 'Fuzzy search for auth files'")
-        print(f"  - 'Recommend files for login feature'")
-        print(f"  - 'Explain what main.py does'")
-    print()
-
-
-@xray
-def _run_chat_loop(agent: Agent, current_repo: str | None):
-    """Run interactive chat loop. Exits only after completing recommendations or explanations."""
-    while True:
-        print("\n> ", end="")
-        user_input = Input().run()
-        
-        if user_input.lower() in ['exit', 'quit', '']:
-            print("\nGoodbye!")
-            break
-        
-        # If using a folder path, add folder_path parameter
-        if current_folder and "folder_path" not in user_input.lower():
-            user_input = f"{user_input} with folder_path={current_folder}"
-        # If using a repo from /repos, add repo_name parameter
-        elif current_repo and current_repo not in user_input.lower() and "repo_name" not in user_input.lower():
-            user_input = f"{user_input} in {current_repo}"
-        
-        response = agent.input(user_input)
-        print(f"\nAssistant: {response}")
-        
-        # Check if response indicates completion of recommendation or explanation
-        response_lower = response.lower()
-        # Only exit for specific recommendation/explanation patterns
-        if any(phrase in response_lower for phrase in [
-            "recommended files for:",
-            "found a few files that seem relevant",
-            "most relevant ones are",
-            "lines:",
-            "classes:",
-            "functions:",
-            "preview (first 25 lines):"
-        ]):
-            break  # Exit after completing recommendation or explanation
-
 
 if __name__ == "__main__":
     """Interactive terminal session with TUI components."""
@@ -636,14 +640,14 @@ if __name__ == "__main__":
     current_folder = None
     
     if action == "Clone a new repository":
-        current_repo = _handle_clone_repo(agent)
+        current_repo = chat._handle_clone_repo(agent)
     elif action == "Use existing repository":
-        current_repo = _handle_use_existing_repo()
+        current_repo = chat._handle_use_existing_repo()
     elif action == "Select arbitrary local folder":
-        current_folder = _handle_select_folder(codebase)
+        current_folder = chat._handle_select_folder(codebase)
     elif action == "Exit":
         print("\nGoodbye!")
     
     if current_repo or current_folder:
-        _show_chat_intro(current_repo, current_folder)
-        _run_chat_loop(agent, current_repo)
+        chat._show_chat_intro(current_repo, current_folder)
+        chat._run_chat_loop(agent, current_repo)
